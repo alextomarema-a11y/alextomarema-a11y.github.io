@@ -1,0 +1,486 @@
+<!DOCTYPE html>
+<html lang="es">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Teleprompter Pro</title>
+    <!-- Cargar Tailwind CSS -->
+    <script src="https://cdn.tailwindcss.com"></script>
+    <!-- Cargar fuente Inter -->
+    <link rel="preconnect" href="https://fonts.googleapis.com">
+    <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+    <link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;700&display=swap" rel="stylesheet">
+    
+    <!-- Cargar PDF.js -->
+    <script src="https://cdnjs.cloudflare.com/ajax/libs/pdf.js/2.16.105/pdf.min.js"></script>
+    
+    <!-- *** Cargar MathJax para Ecuaciones *** -->
+    <script>
+      MathJax = {
+        tex: {
+          inlineMath: [['$', '$'], ['\\(', '\\)']],
+          displayMath: [['$$', '$$'], ['\\[', '\\]']]
+        },
+        svg: {
+          fontCache: 'global'
+        }
+      };
+    </script>
+    <script src="https://polyfill.io/v3/polyfill.min.js?features=es6"></script>
+    <script id="MathJax-script" async src="https://cdn.jsdelivr.net/npm/mathjax@3/es5/tex-mml-chtml.js"></script>
+    
+    <style>
+        body { font-family: 'Inter', sans-serif; }
+        #marker-left, #marker-right {
+            position: absolute;
+            top: 33.3333%; 
+            transform: translateY(-50%);
+            font-size: 2rem;
+            color: rgba(239, 68, 68, 0.7);
+            pointer-events: none;
+            z-index: 10;
+        }
+        #marker-left { left: 1rem; }
+        #marker-right { right: 1rem; }
+        
+        /* --- *** NUEVO: Línea Guía Roja *** --- */
+        #guide-line {
+            position: absolute;
+            top: 33.3333%; /* Coincide con los marcadores */
+            left: 0;
+            width: 100%;
+            height: 100px; /* Grosor de la línea */
+            background-color: rgba(239, 68, 68, 0.30); /* Mismo color que los marcadores */
+            pointer-events: none; /* No bloquear clics */
+            z-index: 10; /* Mismo nivel que los marcadores */
+        }
+        /* --- ***************************** --- */
+
+        #content {
+            line-height: 1.5;
+            will-change: transform;
+        }
+    </style>
+</head>
+<body class="bg-gray-900 text-white flex flex-col h-screen overflow-hidden">
+
+    <!-- BARRA DE CONTROLES -->
+    <header class="bg-gray-800 p-4 shadow-lg z-20">
+        <div class="container mx-auto flex flex-wrap gap-4 items-center justify-center">
+            
+            <button id="toggleButton" class="bg-blue-600 hover:bg-blue-700 text-white font-bold py-2 px-4 rounded-lg transition duration-200 w-28">
+                Iniciar
+            </button>
+            <button id="resetButton" class="bg-red-600 hover:bg-red-700 text-white font-bold py-2 px-4 rounded-lg transition duration-200">
+                Reiniciar
+            </button>
+            <button id="editButton" class="bg-green-600 hover:bg-green-700 text-white font-bold py-2 px-4 rounded-lg transition duration-200">
+                Editar/Pegar
+            </button>
+            <button id="uploadButton" class="bg-purple-600 hover:bg-purple-700 text-white font-bold py-2 px-4 rounded-lg transition duration-200 disabled:opacity-50">
+                Subir .txt / .pdf
+            </button>
+            <input type="file" id="fileInput" class="hidden" accept=".txt,text/plain,.pdf,application/pdf">
+            <button id="mirrorButton" class="bg-gray-600 hover:bg-gray-700 text-white font-bold py-2 px-4 rounded-lg transition duration-200">
+                Espejo (Local)
+            </button>
+            <button id="presenterButton" class="bg-teal-600 hover:bg-teal-700 text-white font-bold py-2 px-4 rounded-lg transition duration-200">
+                Abrir Ventana Presentador
+            </button>
+
+            <div class="flex items-center space-x-2">
+                <label for="speedSlider" class="text-sm font-medium">Velocidad</label>
+                <input id="speedSlider" type="range" min="1" max="100" value="30" class="w-32 md:w-40 accent-blue-500">
+            </div>
+            <div class="flex items-center space-x-2">
+                <label for="fontSizeSlider" class="text-sm font-medium">Tamaño</label>
+                <input id="fontSizeSlider" type="range" min="24" max="120" value="64" class="w-32 md:w-40 accent-blue-500">
+            </div>
+
+        </div>
+    </header>
+
+    <!-- ÁREA DEL TELEPROMPTER -->
+    <main id="scroll-container" class="relative flex-grow w-full overflow-hidden cursor-pointer" title="Haz clic para Iniciar/Pausar">
+        <div id="marker-left">&gt;</div>
+        <div id="marker-right">&lt;</div>
+        
+        <!-- *** NUEVO: Línea Guía Roja *** -->
+        <div id="guide-line"></div>
+        <!-- *********************** -->
+
+        <!-- El contenido se carga desde JavaScript -->
+        <div id="content" class="absolute w-full px-8 md:px-16 lg:px-24" style="font-size: 64px;"></div>
+    </main>
+
+    <!-- MODAL PARA EDITAR TEXTO -->
+    <div id="editor-modal" class="fixed inset-0 bg-black bg-opacity-75 flex items-center justify-center z-50 hidden">
+        <div class="bg-white text-gray-900 p-6 rounded-lg shadow-xl w-11/12 md:w-3/4 lg:w-2/3">
+            <h2 class="text-2xl font-bold mb-4">Editar Texto del Guion</h2>
+            <p class="text-sm text-gray-600 mb-3">
+                Pega tu guion aquí. Para ecuaciones, usa formato LaTeX:
+                <code class="bg-gray-200 px-1 rounded">$inline$</code> y
+                <code class="bg-gray-200 px-1 rounded">$$display$$</code>.
+            </p>
+            <!-- El textarea es la ÚNICA fuente de verdad -->
+            <textarea id="text-editor" class="w-full h-64 md:h-96 p-2 border border-gray-300 rounded-md resize-none text-lg"></textarea>
+            <div class="mt-4 flex justify-end space-x-3">
+                <button id="cancelButton" class="bg-gray-500 hover:bg-gray-600 text-white font-bold py-2 px-4 rounded-lg transition duration-200">
+                    Cancelar
+                </button>
+                <button id="saveButton" class="bg-blue-600 hover:bg-blue-700 text-white font-bold py-2 px-4 rounded-lg transition duration-200">
+                    Guardar y Cerrar
+                </button>
+            </div>
+        </div>
+    </div>
+
+    <!-- SCRIPT PRINCIPAL DE LA APLICACIÓN -->
+    <script>
+        document.addEventListener('DOMContentLoaded', () => {
+            pdfjsLib.GlobalWorkerOptions.workerSrc = 'https://cdnjs.cloudflare.com/ajax/libs/pdf.js/2.16.105/pdf.worker.min.js';
+
+            // Referencias a elementos del DOM
+            const scrollContainer = document.getElementById('scroll-container');
+            const content = document.getElementById('content');
+            const toggleButton = document.getElementById('toggleButton');
+            const resetButton = document.getElementById('resetButton');
+            const mirrorButton = document.getElementById('mirrorButton');
+            const editButton = document.getElementById('editButton');
+            const speedSlider = document.getElementById('speedSlider');
+            const fontSizeSlider = document.getElementById('fontSizeSlider');
+            const uploadButton = document.getElementById('uploadButton');
+            const fileInput = document.getElementById('fileInput');
+            const editorModal = document.getElementById('editor-modal');
+            const textEditor = document.getElementById('text-editor'); // <-- Fuente de Verdad
+            const saveButton = document.getElementById('saveButton');
+            const cancelButton = document.getElementById('cancelButton');
+            const presenterButton = document.getElementById('presenterButton');
+            const channel = new BroadcastChannel('teleprompter_sync');
+            const urlParams = new URLSearchParams(window.location.search);
+            const isPresenterMode = urlParams.get('mode') === 'presenter';
+
+            // Estado de la aplicación
+            let isScrolling = false;
+            let currentY = 0;
+            let initialY = 0;
+            let lastTimestamp = 0;
+            let animationFrameId = null;
+
+            const defaultScriptText = "Bienvenido al Teleprompter Pro.\n\n" +
+                                "Haz clic en \"Editar Texto\" en la barra de control para pegar tu propio guion.\n\n" +
+                                "Usa los controles deslizantes para ajustar la velocidad y el tamaño de la fuente.\n\n" +
+                                "Haz clic en \"Iniciar\" para comenzar el desplazamiento.\n\n" +
+                                "Puedes hacer clic en cualquier parte de esta área negra para pausar o reanudar rápidamente.\n\n" +
+                                "El botón \"Espejo\" invertirá horizontalmente todo el texto, lo cual es útil para plataformas de teleprompter de vidrio.\n\n" +
+                                "¡Disfruta!";
+
+            const getSpeed = () => {
+                const speedValue = parseInt(speedSlider.value, 10);
+                return 20 + (speedValue / 100) * 280;
+            };
+
+            const setInitialPosition = () => {
+                initialY = scrollContainer.offsetHeight * 0.33;
+                currentY = initialY;
+                content.style.transform = `translateY(${currentY}px)`;
+                content.style.transition = 'none';
+            };
+
+            /**
+             * Actualiza el DIV de contenido basándose en el texto plano.
+             * @param {string} rawText - El texto plano del guion.
+             */
+            const updateContent = (rawText) => {
+                const paragraphs = rawText.split(/\n\s*\n+/); 
+                
+                content.innerHTML = paragraphs.map(para => {
+                    const lines = para.replace(/\n/g, '<br>');
+                    return `<p>${lines}</p>`;
+                }).join('<br>');
+
+                if (window.MathJax) {
+                    setTimeout(() => {
+                        MathJax.typesetPromise([content]).catch((err) => console.log('MathJax typeset error: ', err));
+                    }, 1);
+                }
+                resetScroll();
+            };
+
+            /**
+             * Función centralizada para enviar el estado del texto a todos.
+             */
+            const syncText = () => {
+                const rawText = textEditor.value; // Lee de la fuente de verdad
+                updateContent(rawText);
+                
+                // Enviar el HTML renderizado (content.innerHTML) y el texto plano (rawText)
+                channel.postMessage({ 
+                    type: 'TEXT_UPDATE', 
+                    text: content.innerHTML, 
+                    rawText: rawText 
+                });
+            };
+
+            const scrollLoop = (timestamp) => {
+                if (!isScrolling) return;
+                if (!lastTimestamp) lastTimestamp = timestamp;
+                const deltaTime = (timestamp - lastTimestamp) / 1000;
+                lastTimestamp = timestamp;
+                currentY -= getSpeed() * deltaTime;
+                const contentHeight = content.offsetHeight;
+                if (Math.abs(currentY) > contentHeight) {
+                    pauseScroll();
+                    return;
+                }
+                content.style.transform = `translateY(${currentY}px)`;
+                animationFrameId = requestAnimationFrame(scrollLoop);
+            };
+
+            const startScroll = () => {
+                if (isScrolling) return;
+                isScrolling = true;
+                toggleButton.textContent = 'Pausar';
+                lastTimestamp = 0;
+                animationFrameId = requestAnimationFrame(scrollLoop);
+            };
+
+            const pauseScroll = () => {
+                if (!isScrolling) return;
+                isScrolling = false;
+                toggleButton.textContent = 'Iniciar';
+                if (animationFrameId) cancelAnimationFrame(animationFrameId);
+                animationFrameId = null;
+            };
+
+            const resetScroll = () => {
+                pauseScroll();
+                content.style.transition = 'transform 0.3s ease-out';
+                setInitialPosition();
+                setTimeout(() => {
+                    content.style.transition = 'none';
+                }, 300);
+            };
+
+            // ---- Asignación de Eventos ----
+
+            if (isPresenterMode) {
+                // ==========================================================
+                // *** MODO PRESENTADOR (VENTANA SECUNDARIA) ***
+                // ==========================================================
+                document.querySelector('header').style.display = 'none';
+                scrollContainer.classList.add('scale-x-[-1]');
+                scrollContainer.style.cursor = 'none';
+                document.title = "Presentador";
+
+                channel.onmessage = (event) => {
+                    const msg = event.data;
+                    switch (msg.type) {
+                        case 'START':
+                            speedSlider.value = msg.speed;
+                            startScroll();
+                            break;
+                        case 'PAUSE':
+                            pauseScroll();
+                            currentY = msg.y;
+                            content.style.transform = `translateY(${currentY}px)`;
+                            break;
+                        case 'RESET':
+                            resetScroll();
+                            break;
+                        case 'MANUAL_SCROLL':
+                            if (isScrolling) pauseScroll();
+                            currentY = msg.y;
+                            content.style.transition = 'none';
+                            content.style.transform = `translateY(${currentY}px)`;
+                            break;
+                        case 'TEXT_UPDATE':
+                            // El presentador solo necesita actualizar su contenido.
+                            textEditor.value = msg.rawText; // Sincronizar el estado del editor
+                            content.innerHTML = msg.text;  // Sincronizar el contenido visible
+                            
+                            if (window.MathJax) {
+                                setTimeout(() => {
+                                    MathJax.typesetPromise([content]).catch((err) => console.log('MathJax typeset error: ', err));
+                                }, 1);
+                            }
+                            resetScroll();
+                            break;
+                        case 'FONT_UPDATE':
+                            content.style.fontSize = msg.size;
+                            fontSizeSlider.value = msg.size.replace('px', '');
+                            setInitialPosition();
+                            break;
+                    }
+                };
+                
+                // *** CORRECCIÓN V5: Pedir el estado al Operador ***
+                // Se pide después de un breve tiempo para asegurar que el operador
+                // ya esté escuchando.
+                setTimeout(() => {
+                    channel.postMessage({ type: 'REQUEST_STATE' });
+                }, 100);
+
+
+            } else {
+                // ==========================================================
+                // *** MODO OPERADOR (VENTANA PRINCIPAL) ***
+                // ==========================================================
+                presenterButton.addEventListener('click', () => {
+                    let presenterViewUrl = window.location.href;
+                    if (presenterViewUrl.includes('?')) {
+                        presenterViewUrl = presenterViewUrl.split('?')[0];
+                    }
+                    presenterViewUrl += '?mode=presenter';
+                    window.open(presenterViewUrl, 'PresenterWindow', 'width=1024,height=768,menubar=no,toolbar=no,location=no,status=no');
+                });
+
+                toggleButton.addEventListener('click', () => {
+                    if (isScrolling) {
+                        pauseScroll();
+                        channel.postMessage({ type: 'PAUSE', y: currentY });
+                    } else {
+                        startScroll();
+                        channel.postMessage({ type: 'START', speed: speedSlider.value });
+                    }
+                });
+
+                scrollContainer.addEventListener('click', (e) => {
+                    if (e.target === scrollContainer) toggleButton.click();
+                });
+
+                scrollContainer.addEventListener('wheel', (e) => {
+                    if (isScrolling) {
+                        pauseScroll();
+                        channel.postMessage({ type: 'PAUSE', y: currentY });
+                    }
+                    e.preventDefault(); 
+                    const manualScrollSpeed = 1; 
+                    let newY = currentY - (e.deltaY * manualScrollSpeed);
+                    const contentHeight = content.offsetHeight;
+                    const bottomLimit = initialY - contentHeight;
+                    const topLimit = initialY; 
+                    newY = Math.max(bottomLimit, newY); 
+                    newY = Math.min(topLimit, newY);   
+                    currentY = newY;
+                    content.style.transition = 'none'; 
+                    content.style.transform = `translateY(${currentY}px)`;
+                    channel.postMessage({ type: 'MANUAL_SCROLL', y: currentY });
+                });
+
+                resetButton.addEventListener('click', () => {
+                    resetScroll();
+                    channel.postMessage({ type: 'RESET' });
+                });
+
+                mirrorButton.addEventListener('click', () => {
+                    scrollContainer.classList.toggle('scale-x-[-1]');
+                });
+
+                speedSlider.addEventListener('input', () => {
+                    if (isScrolling) {
+                        channel.postMessage({ type: 'START', speed: speedSlider.value });
+                    }
+                });
+
+                fontSizeSlider.addEventListener('input', (e) => {
+                    const newSize = `${e.target.value}px`;
+                    content.style.fontSize = newSize;
+                    setInitialPosition();
+                    channel.postMessage({ type: 'FONT_UPDATE', size: newSize });
+                });
+
+                uploadButton.addEventListener('click', () => {
+                    fileInput.click(); 
+                });
+
+                fileInput.addEventListener('change', async (e) => {
+                    const file = e.target.files[0];
+                    if (!file) return;
+                    uploadButton.textContent = 'Procesando...';
+                    uploadButton.disabled = true;
+                    let fileRawText = '';
+                    try {
+                        if (file.type === 'text/plain') {
+                            fileRawText = await new Promise((resolve, reject) => {
+                                const reader = new FileReader();
+                                reader.onload = (event) => resolve(event.target.result);
+                                reader.onerror = (err) => reject(new Error("Error al leer archivo .txt"));
+                                reader.readAsText(file);
+                            });
+                        } else if (file.type === 'application/pdf') {
+                            const arrayBuffer = await new Promise((resolve, reject) => {
+                                const reader = new FileReader();
+                                reader.onload = (event) => resolve(event.target.result);
+                                reader.onerror = (err) => reject(new Error("Error al leer el buffer del PDF"));
+                                reader.readAsArrayBuffer(file);
+                            });
+                            const loadingTask = pdfjsLib.getDocument({ data: arrayBuffer });
+                            const pdf = await loadingTask.promise;
+                            const allPageText = [];
+                            for (let i = 1; i <= pdf.numPages; i++) {
+                                const page = await pdf.getPage(i);
+                                const textContent = await page.getTextContent();
+                                const pageText = textContent.items.map(item => item.str).join(' ');
+                                allPageText.push(pageText);
+
+                            }
+                            fileRawText = allPageText.join('\n\n');
+                        } else {
+                            throw new Error("Tipo de archivo no soportado. Por favor sube .txt o .pdf");
+                        }
+                        
+                        // Actualizar la fuente de verdad (el editor)
+                        textEditor.value = fileRawText; 
+                        // Sincronizar a todos
+                        syncText(); 
+
+                    } catch (err) {
+                        console.error(err);
+                        alert(err.message || "Error al procesar el archivo.");
+                    } finally {
+                        uploadButton.textContent = 'Subir .txt / .pdf';
+                        uploadButton.disabled = false;
+                        e.target.value = null;
+                    }
+                });
+
+                // ---- Lógica del Modal de Edición ----
+                editButton.addEventListener('click', () => {
+                    // Ya no necesita cargar texto, el textEditor siempre está actualizado.
+                    editorModal.classList.remove('hidden');
+                    textEditor.focus();
+                });
+
+                cancelButton.addEventListener('click', () => {
+                    editorModal.classList.add('hidden');
+                });
+
+                saveButton.addEventListener('click', () => {
+                    // El texto ya está en textEditor.value
+                    syncText(); // Sincronizar a todos
+                    editorModal.classList.add('hidden');
+                    // resetScroll() se llama dentro de syncText()
+                });
+
+                // *** CORRECCIÓN V5: El Operador escucha peticiones ***
+                channel.onmessage = (event) => {
+                    const msg = event.data;
+                    if (msg.type === 'REQUEST_STATE') {
+                        // Un presentador se conectó y pide el guion.
+                        // Enviar el guion actual.
+                        syncText();
+                    }
+                };
+            }
+
+            // ---- Inicialización (para ambas ventanas) ----
+            // Cargar texto por defecto en la fuente de verdad (el editor)
+            textEditor.value = defaultScriptText;
+            updateContent(defaultScriptText); // Cargar el contenido inicial en la pantalla local
+            setInitialPosition();
+            window.addEventListener('resize', resetScroll);
+        });
+    </script>
+</body>
+</html>
